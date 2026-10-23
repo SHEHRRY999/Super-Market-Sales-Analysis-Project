@@ -1,0 +1,435 @@
+# ==============================================================
+# Supermarket Sales Analysis 
+# ==============================================================
+
+## ----load-------------------------------------------------------------------
+library(dplyr)
+
+sales_raw <- read.csv("supermarket_sales.csv")
+
+
+## ----dims-------------------------------------------------------------------
+dim(sales_raw)
+cat("Rows:", nrow(sales_raw), "\n")
+cat("Columns:", ncol(sales_raw), "\n")
+
+
+## ----structure--------------------------------------------------------------
+str(sales_raw)
+
+
+## ----head-------------------------------------------------------------------
+head(sales_raw[, 1:6])
+head(sales_raw[, 7:12])
+head(sales_raw[, 13:17])
+tail(sales_raw[, 1:6], 3)
+
+
+## ----summary-num------------------------------------------------------------
+summary(sales_raw[, c("Unit.price", "Quantity", "Tax.5.", "Total")])
+summary(sales_raw[, c("cogs", "gross.margin.percentage",
+                      "gross.income", "Rating")])
+
+
+## ----categorical------------------------------------------------------------
+cat_cols <- c("Branch", "City", "Customer.type", "Gender",
+              "Product.line", "Payment")
+
+for (col in cat_cols) {
+  cat("\n", col, "\n")
+  print(table(sales_raw[[col]]))
+}
+
+# Payment method as percentages
+round(prop.table(table(sales_raw$Payment)) * 100, 1)
+
+
+## ----date-range-------------------------------------------------------------
+date_check <- as.Date(sales_raw$Date, format = "%m/%d/%Y")
+range(date_check)
+length(unique(date_check))
+
+
+## ----stats------------------------------------------------------------------
+get_mode <- function(x) {
+  freq <- table(x)
+  as.numeric(names(freq[freq == max(freq)]))
+}
+
+num_cols <- c("Unit.price", "Quantity", "Total", "Rating")
+stats_table <- data.frame()
+
+for (col in num_cols) {
+  x <- sales_raw[[col]]
+  stats_table <- rbind(stats_table, data.frame(
+    Mean     = mean(x),
+    Median   = median(x),
+    Mode     = get_mode(x)[1],
+    Min      = min(x),
+    Max      = max(x),
+    Range    = max(x) - min(x),
+    Variance = var(x),
+    SD       = sd(x),
+    Q1       = quantile(x, 0.25),
+    Q3       = quantile(x, 0.75),
+    IQR      = IQR(x),
+    CV_pct   = sd(x) / mean(x) * 100
+  ))
+}
+rownames(stats_table) <- num_cols
+
+# Show with variables as columns so that the table fits the page
+round(t(stats_table), 2)
+
+
+## ----group-stats------------------------------------------------------------
+branch_stats <- sales_raw %>%
+  group_by(Branch, City) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            Average_Sale = round(mean(Total), 2),
+            Average_Rating = round(mean(Rating), 2),
+            .groups = "drop")
+branch_stats
+
+product_stats <- sales_raw %>%
+  group_by(Product.line) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            Average_Sale = round(mean(Total), 2),
+            Average_Rating = round(mean(Rating), 2),
+            .groups = "drop") %>%
+  arrange(desc(Total_Sales))
+product_stats
+
+payment_stats <- sales_raw %>%
+  group_by(Payment) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            .groups = "drop")
+payment_stats
+
+customer_stats <- sales_raw %>%
+  group_by(Customer.type, Gender) %>%
+  summarise(Transactions = n(),
+            Average_Sale = round(mean(Total), 2),
+            Average_Rating = round(mean(Rating), 2),
+            .groups = "drop")
+customer_stats
+
+
+## ----correlation------------------------------------------------------------
+cor_price    <- cor(sales_raw$Unit.price, sales_raw$Total)
+cor_quantity <- cor(sales_raw$Quantity, sales_raw$Total)
+cor_rating   <- cor(sales_raw$Rating, sales_raw$Total)
+
+cat("Unit price vs Total:", round(cor_price, 3), "\n")
+cat("Quantity vs Total  :", round(cor_quantity, 3), "\n")
+cat("Rating vs Total    :", round(cor_rating, 3), "\n")
+
+
+## ----missing----------------------------------------------------------------
+colSums(is.na(sales_raw))
+cat("Total missing values:", sum(is.na(sales_raw)), "\n")
+
+
+## ----duplicates-------------------------------------------------------------
+cat("Duplicated rows       :", sum(duplicated(sales_raw)), "\n")
+cat("Duplicated Invoice IDs:", sum(duplicated(sales_raw$Invoice.ID)), "\n")
+
+
+## ----inconsistent-----------------------------------------------------------
+for (col in cat_cols) {
+  n_space <- sum(sales_raw[[col]] != trimws(sales_raw[[col]]))
+  n_case  <- length(unique(sales_raw[[col]])) -
+             length(unique(tolower(trimws(sales_raw[[col]]))))
+  cat(col, "- values with extra spaces:", n_space,
+      "| labels duplicated by case:", n_case, "\n")
+}
+
+table(sales_raw$Branch, sales_raw$City)
+
+
+## ----invalid----------------------------------------------------------------
+date_ok <- as.Date(sales_raw$Date, format = "%m/%d/%Y")
+
+invalid_report <- data.frame(
+  Check = c("Unit price <= 0",
+            "Quantity < 1",
+            "Rating outside 1-10",
+            "Total <= 0",
+            "Date that cannot be converted",
+            "Time not in hh:mm format",
+            "Total different from Unit price x Quantity x 1.05",
+            "cogs different from Unit price x Quantity",
+            "Tax different from 5% of cogs"),
+  Records_Found = c(
+    sum(sales_raw$Unit.price <= 0),
+    sum(sales_raw$Quantity < 1),
+    sum(sales_raw$Rating < 1 | sales_raw$Rating > 10),
+    sum(sales_raw$Total <= 0),
+    sum(is.na(date_ok)),
+    sum(nchar(sales_raw$Time) != 5),
+    sum(abs(sales_raw$Unit.price * sales_raw$Quantity * 1.05 -
+            sales_raw$Total) > 0.01),
+    sum(abs(sales_raw$cogs -
+            sales_raw$Unit.price * sales_raw$Quantity) > 0.01),
+    sum(abs(sales_raw$Tax.5. - 0.05 * sales_raw$cogs) > 0.01)
+  )
+)
+invalid_report
+
+
+## ----redundant--------------------------------------------------------------
+identical(sales_raw$Tax.5., sales_raw$gross.income)
+unique(sales_raw$gross.margin.percentage)
+
+
+## ----outliers---------------------------------------------------------------
+Q1 <- quantile(sales_raw$Total, 0.25)
+Q3 <- quantile(sales_raw$Total, 0.75)
+iqr_value   <- IQR(sales_raw$Total)
+lower_limit <- Q1 - 1.5 * iqr_value
+upper_limit <- Q3 + 1.5 * iqr_value
+
+lower_limit
+upper_limit
+sum(sales_raw$Total < lower_limit | sales_raw$Total > upper_limit)
+sales_raw$Total[sales_raw$Total > upper_limit]
+
+
+## ----clean-apply------------------------------------------------------------
+sales <- sales_raw
+cat("Rows before cleaning:", nrow(sales), "\n")
+
+sales <- sales[!duplicated(sales), ]       # remove duplicate records
+sales <- na.omit(sales)                    # remove rows with missing values
+
+# keep only rows that satisfy the logical rules
+sales <- sales[sales$Unit.price > 0 & sales$Quantity >= 1 &
+               sales$Rating >= 1 & sales$Rating <= 10 &
+               sales$Total > 0, ]
+
+# remove extra spaces from every text column
+for (col in cat_cols) {
+  sales[[col]] <- trimws(sales[[col]])
+}
+
+cat("Rows after cleaning :", nrow(sales), "\n")
+
+
+## ----drop-cols--------------------------------------------------------------
+sales$gross.margin.percentage <- NULL      # constant column
+sales$gross.income <- NULL                 # identical to Tax.5.
+names(sales)
+
+
+## ----rename-----------------------------------------------------------------
+sales <- sales %>%
+  rename(Invoice_ID    = Invoice.ID,
+         Customer_Type = Customer.type,
+         Product_Line  = Product.line,
+         Unit_Price    = Unit.price,
+         Tax           = Tax.5.)
+names(sales)
+
+
+## ----types------------------------------------------------------------------
+sales$Date <- as.Date(sales$Date, format = "%m/%d/%Y")
+
+factor_cols <- c("Branch", "City", "Customer_Type", "Gender",
+                 "Product_Line", "Payment")
+for (col in factor_cols) {
+  sales[[col]] <- factor(sales[[col]])
+}
+
+sapply(sales, class)
+
+
+## ----consistency------------------------------------------------------------
+dim(sales)
+colSums(is.na(sales))
+sum(duplicated(sales))
+range(sales$Date)
+summary(sales[, c("Unit_Price", "Quantity", "Total", "Rating")])
+table(sales$Branch, sales$City)
+
+
+## ----t-date-----------------------------------------------------------------
+sales$Month   <- format(sales$Date, "%B")
+sales$Weekday <- format(sales$Date, "%A")
+
+sales$Month   <- factor(sales$Month,
+                        levels = c("January", "February", "March"))
+sales$Weekday <- factor(sales$Weekday,
+                        levels = c("Monday", "Tuesday", "Wednesday",
+                                   "Thursday", "Friday", "Saturday",
+                                   "Sunday"))
+head(sales[, c("Date", "Month", "Weekday")])
+
+
+## ----t-time-----------------------------------------------------------------
+sales$Hour <- as.integer(gsub(":.*", "", sales$Time))
+
+sales <- sales %>%
+  mutate(Time_Of_Day = case_when(Hour < 12 ~ "Morning",
+                                 Hour < 17 ~ "Afternoon",
+                                 TRUE      ~ "Evening"))
+sales$Time_Of_Day <- factor(sales$Time_Of_Day,
+                            levels = c("Morning", "Afternoon", "Evening"))
+
+head(sales[, c("Time", "Hour", "Time_Of_Day")])
+table(sales$Time_Of_Day)
+
+
+## ----t-size-----------------------------------------------------------------
+q <- quantile(sales$Total)
+q
+
+sales <- sales %>%
+  mutate(Sale_Size = case_when(Total <= q[2] ~ "Small",
+                               Total <= q[4] ~ "Medium",
+                               TRUE          ~ "Large"))
+sales$Sale_Size <- factor(sales$Sale_Size,
+                          levels = c("Small", "Medium", "Large"))
+table(sales$Sale_Size)
+
+
+## ----t-rating---------------------------------------------------------------
+sales <- sales %>%
+  mutate(Rating_Level = case_when(Rating < 6  ~ "Low",
+                                  Rating <= 8 ~ "Medium",
+                                  TRUE        ~ "High"))
+sales$Rating_Level <- factor(sales$Rating_Level,
+                             levels = c("Low", "Medium", "High"))
+table(sales$Rating_Level)
+round(prop.table(table(sales$Rating_Level)) * 100, 1)
+
+
+## ----t-minmax---------------------------------------------------------------
+sales$Total_Normalized <- (sales$Total - min(sales$Total)) /
+                          (max(sales$Total) - min(sales$Total))
+summary(sales$Total_Normalized)
+
+
+## ----t-log------------------------------------------------------------------
+sales$Total_Log10 <- log10(sales$Total)
+summary(sales$Total_Log10)
+cat("Mean vs median of Total       :", round(mean(sales$Total), 1), "vs",
+    round(median(sales$Total), 1), "\n")
+cat("Mean vs median of log10(Total):", round(mean(sales$Total_Log10), 3),
+    "vs", round(median(sales$Total_Log10), 3), "\n")
+
+
+## ----t-z--------------------------------------------------------------------
+sales$Rating_Z <- as.numeric(scale(sales$Rating))
+round(c(mean = mean(sales$Rating_Z), sd = sd(sales$Rating_Z)), 3)
+
+
+## ----transformed-summaries--------------------------------------------------
+# Sales by month
+month_sales <- sales %>%
+  group_by(Month) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            .groups = "drop")
+month_sales
+
+# Sales by weekday
+weekday_sales <- sales %>%
+  group_by(Weekday) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            .groups = "drop")
+weekday_sales
+
+# Sales by hour
+hour_sales <- sales %>%
+  group_by(Hour) %>%
+  summarise(Transactions = n(),
+            Total_Sales = round(sum(Total), 2),
+            .groups = "drop")
+hour_sales
+
+# Rating level by branch
+table(sales$Branch, sales$Rating_Level)
+
+
+## ----export, include=FALSE, purl=TRUE---------------------------------------
+write.csv(sales, "supermarket_sales_cleaned.csv", row.names = FALSE)
+
+
+## ----fig-hist---------------------------------------------------------------
+hist(sales$Total,
+     breaks = 15,
+     col = "steelblue",
+     main = "Distribution of Invoice Total",
+     xlab = "Invoice Total",
+     ylab = "Number of Transactions")
+
+
+## ----fig-bar----------------------------------------------------------------
+product_sales <- sales %>%
+  group_by(Product_Line) %>%
+  summarise(Total_Sales = sum(Total), .groups = "drop") %>%
+  arrange(desc(Total_Sales))
+
+par(mar = c(10, 7, 4, 2), mgp = c(5, 1, 0))   # larger margins for the labels
+barplot(product_sales$Total_Sales,
+        names.arg = as.character(product_sales$Product_Line),
+        las = 2,
+        col = "orange",
+        main = "Total Sales by Product Line",
+        ylab = "Total Sales")
+
+
+## ----fig-pie----------------------------------------------------------------
+payment_table <- table(sales$Payment)
+payment_pct   <- round(prop.table(payment_table) * 100, 1)
+pie_labels    <- paste(names(payment_table), payment_pct, "%")
+
+pie(payment_table,
+    labels = pie_labels,
+    col = c("lightblue", "lightgreen", "salmon"),
+    main = "Share of Transactions by Payment Method")
+
+
+## ----fig-box----------------------------------------------------------------
+boxplot(sales$Total[sales$Branch == "A"],
+        sales$Total[sales$Branch == "B"],
+        sales$Total[sales$Branch == "C"],
+        names = c("A (Yangon)", "B (Mandalay)", "C (Naypyitaw)"),
+        col = c("lightblue", "lightgreen", "pink"),
+        main = "Invoice Total by Branch",
+        ylab = "Invoice Total")
+
+
+## ----fig-scatter------------------------------------------------------------
+plot(sales$Quantity, sales$Total,
+     pch = 19,
+     col = "darkgreen",
+     main = "Quantity Purchased vs Invoice Total",
+     xlab = "Quantity",
+     ylab = "Invoice Total")
+
+
+## ----fig-line---------------------------------------------------------------
+daily_sales <- sales %>%
+  group_by(Date) %>%
+  summarise(Daily_Sales = sum(Total), .groups = "drop")
+
+plot(daily_sales$Date, daily_sales$Daily_Sales,
+     type = "l",
+     col = "red",
+     lwd = 2,
+     main = "Daily Sales (January - March 2019)",
+     xlab = "Date",
+     ylab = "Total Sales per Day")
+
+
+## ----fig-hour---------------------------------------------------------------
+barplot(table(sales$Hour),
+        col = "purple",
+        main = "Number of Transactions by Hour of the Day",
+        xlab = "Hour of the Day (24-hour clock)",
+        ylab = "Number of Transactions")
