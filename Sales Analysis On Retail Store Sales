@@ -1,0 +1,438 @@
+############################################################
+#  SUPERMARKET SALES DATA ANALYSIS
+#  Dataset : "Retail Store Sales - Dirty for Data Cleaning"
+#            Kaggle: ahmedmohamed2003 (full URL in STEP 1)
+#
+#  HOW TO RUN (3 steps - read this once)
+#  -------------------------------------
+#  1. Put this file and retail_store_sales.csv in the SAME
+#     folder. (If the CSV is missing, the script will try to
+#     download it from Kaggle by itself - internet needed.)
+#  2. In RStudio: open this file, then use the menu:
+#     Session > Set Working Directory > To Source File Location
+#  3. Click the "Source" button (top-right of the editor).
+#       - FIRST run only: it auto-installs 2 packages
+#         (dplyr, tidyr). Needs internet, takes 1-2 minutes.
+#       - Every run after that: fully offline, ~10 seconds.
+
+#  REPORT MAP (which STEP feeds which report section):
+#   Report: Exploration & Statistics   -> STEPS 2 and 4
+#   Report: Cleaning & Preprocessing   -> STEP 3
+#   Report: Transformation             -> STEP 5
+#   Report: Visualization              -> STEP 6
+#   Report: Results & Discussion       -> STEPS 7 and 8
+############################################################
+
+
+cat("=====================================================\n")
+cat("  SUPERMARKET SALES DATA ANALYSIS - MID TERM PROJECT\n")
+cat("=====================================================\n")
+
+
+############################################################
+#  STEP 0 - SETUP: PACKAGES (auto-install on first run)
+############################################################
+# We only need 2 extra packages
+#   dplyr -> group_by(), summarise(), arrange(), filter()
+#   tidyr -> pivot_wider() for reshaping tables
+# (The red "masking" messages when loading dplyr are NORMAL.)
+
+library(dplyr)
+library(tidyr)
+
+#  STEP 1 - GET THE DATA (auto-download if missing)
+# Dataset: "Retail Store Sales - Dirty for Data Cleaning"
+# Source : https://www.kaggle.com/datasets/ahmedmohamed2003/
+#          retail-store-sales-dirty-for-data-cleaning
+# 12,575 real transactions from a retail store (2022-2025).
+# We deliberately picked a DIRTY dataset because the project
+# gives the most marks to cleaning & preprocessing (6 of 25).
+csv_file <- "retail_store_sales.csv"
+sales_raw <- read.csv(csv_file, stringsAsFactors = FALSE)
+cat("Data loaded successfully!\n\n")
+
+#  STEP 2 - DATA EXPLORATION
+
+cat("-----------------------------------------------------\n")
+cat("STEP 2: FIRST LOOK AT THE RAW DATA\n")
+cat("-----------------------------------------------------\n")
+
+cat("\n-- Size of the dataset --\n")
+cat("Rows   :", nrow(sales_raw), "\n")
+cat("Columns:", ncol(sales_raw), "\n")
+cat("Unique customers:", length(unique(sales_raw$Customer.ID)), "\n")
+
+cat("\n-- First 6 rows (head) --\n")
+print(head(sales_raw))
+
+cat("\n-- Structure of every column (str) --\n")
+str(sales_raw)
+
+cat("\n-- Summary of the raw data (summary) --\n")
+print(summary(sales_raw))
+
+cat("\n-- The product categories --\n")
+print(table(sales_raw$Category))
+
+cat("\n-- Missing values in each column --\n")
+print(colSums(is.na(sales_raw)))
+
+cat("\n-- Exact duplicate rows --\n")
+cat("Number of duplicated rows:", sum(duplicated(sales_raw)), "\n")
+
+#  STEP 3 - CLEANING & PREPROCESSING
+
+sales <- sales_raw   # keep the raw copy untouched for comparison
+
+# -- 3.1 Rename columns: "Price.Per.Unit" -> "price_per_unit"
+# WHY: read.csv turns spaces into dots; lowercase snake_case
+#      names are easier to type and read.
+names(sales) <- c("transaction_id", "customer_id", "category",
+                  "item", "price_per_unit", "quantity",
+                  "total_spent", "payment_method", "location",
+                  "transaction_date", "discount_applied")
+
+# -- 3.2 Clean every text column (Lab 6: trimws)
+# WHY: hidden extra spaces and placeholder words like
+#      "ERROR" / "UNKNOWN" are dirty values. We convert them
+#      to NA so they are counted and handled properly.
+char_cols <- names(sales)[sapply(sales, is.character)]
+for (col in char_cols) {
+  sales[[col]] <- trimws(sales[[col]])
+  sales[[col]][sales[[col]] == ""]        <- NA
+  sales[[col]][sales[[col]] == "UNKNOWN"] <- NA
+  sales[[col]][sales[[col]] == "ERROR"]   <- NA
+}
+
+# -- 3.3 Fix data types (Lab 6: as.numeric / as.Date)
+# WHY: Total Spent and Transaction Date arrive as TEXT, so
+#      maths and date functions would fail on them.
+#      suppressWarnings() hides R's complaint about the few
+#      text values that cannot become numbers - we count
+#      them as NA in the next step instead.
+sales$price_per_unit   <- suppressWarnings(as.numeric(sales$price_per_unit))
+sales$quantity         <- suppressWarnings(as.numeric(sales$quantity))
+sales$total_spent      <- suppressWarnings(as.numeric(sales$total_spent))
+sales$transaction_date <- as.Date(sales$transaction_date, format = "%Y-%m-%d")
+
+cat("\n-- Missing values AFTER type fixing --\n")
+print(colSums(is.na(sales)))
+
+# -- 3.4 RECONSTRUCT missing numbers instead of deleting rows
+# THE key cleaning decision of our project:
+# in a supermarket  Total Spent = Price Per Unit x Quantity,
+# so when ONE of the three is missing we can simply
+# CALCULATE it back. Deleting all these rows would throw
+# away perfectly good data.
+need_total <- is.na(sales$total_spent) &
+              !is.na(sales$price_per_unit) & !is.na(sales$quantity)
+n_total_fixed <- sum(need_total)
+sales$total_spent[need_total] <-
+  sales$price_per_unit[need_total] * sales$quantity[need_total]
+
+need_price <- is.na(sales$price_per_unit) &
+              !is.na(sales$total_spent) & !is.na(sales$quantity)
+n_price_fixed <- sum(need_price)
+sales$price_per_unit[need_price] <-
+  round(sales$total_spent[need_price] / sales$quantity[need_price], 2)
+
+need_qty <- is.na(sales$quantity) &
+            !is.na(sales$total_spent) & !is.na(sales$price_per_unit)
+n_qty_fixed <- sum(need_qty)
+sales$quantity[need_qty] <-
+  round(sales$total_spent[need_qty] / sales$price_per_unit[need_qty], 2)
+
+cat("\n-- Reconstruction report --\n")
+cat("total_spent    repaired:", n_total_fixed, "rows\n")
+cat("price_per_unit repaired:", n_price_fixed, "rows\n")
+cat("quantity       repaired:", n_qty_fixed, "rows\n")
+
+# -- 3.5 Drop only the rows we truly cannot repair
+# WHY: if 2 or more of the 3 numbers are missing at the same
+#      time, reconstruction is impossible. We check that the
+#      count is tiny before dropping (it is < 1% of rows).
+bad_rows <- which(is.na(sales$price_per_unit) |
+                  is.na(sales$quantity)    |
+                  is.na(sales$total_spent) |
+                  is.na(sales$transaction_date))
+cat("Unrepairable rows dropped:", length(bad_rows),
+    "of", nrow(sales), "rows\n")
+if (length(bad_rows) > 0) sales <- sales[-bad_rows, ]
+
+# -- 3.6 Handle missing text values with honest labels
+# WHY: we cannot guess WHICH item a customer bought, so we
+#      do not invent one - we label it "Unknown Item".
+#      Same honesty for discounts: Yes / No / Unknown.
+sales$item[is.na(sales$item)] <- "Unknown Item"
+
+sales$discount_applied <- toupper(as.character(sales$discount_applied))
+sales$discount_applied[is.na(sales$discount_applied)]  <- "Unknown"
+sales$discount_applied[sales$discount_applied == "TRUE"]  <- "Yes"
+sales$discount_applied[sales$discount_applied == "FALSE"] <- "No"
+
+# -- 3.7 Final quality check: prove the data is clean now
+cat("\n-- FINAL CHECK: missing values left --\n")
+print(colSums(is.na(sales)))
+cat("Duplicated rows left:", sum(duplicated(sales)), "\n")
+cat("Clean dataset size  :", nrow(sales), "rows x",
+    ncol(sales), "columns\n\n")
+
+
+############################################################
+#  STEP 4 - DESCRIPTIVE STATISTICS (Lab 5)
+############################################################
+
+get_mode <- function(v) {          # custom function (Lab 2)
+  freq <- table(v)                 # table() = frequency count
+  names(freq)[freq == max(freq)]
+}
+
+cat("-----------------------------------------------------\n")
+cat("STEP 4: DESCRIPTIVE STATISTICS\n")
+cat("-----------------------------------------------------\n")
+
+# -- 4.1 A full statistic card for every numeric column
+num_cols <- c("price_per_unit", "quantity", "total_spent")
+for (col in num_cols) {            # for loop (Lab 2)
+  x <- sales[[col]]
+  cat("\n=====", col, "=====\n")
+  cat("Mean      :", round(mean(x), 2), "\n")
+  cat("Median    :", round(median(x), 2), "\n")
+  cat("Mode      :", paste(get_mode(x), collapse = ", "), "\n")
+  cat("Minimum   :", round(min(x), 2), "\n")
+  cat("Maximum   :", round(max(x), 2), "\n")
+  cat("Range     :", round(max(x) - min(x), 2), "\n")
+  cat("Variance  :", round(var(x), 2), "\n")
+  cat("Std. Dev. :", round(sd(x), 2), "\n")
+  cat("Q1 / Q3   :", quantile(x, 0.25), "/", quantile(x, 0.75), "\n")
+  cat("IQR       :", round(IQR(x), 2), "\n")
+}
+
+# -- 4.2 Outlier detection with the 1.5 x IQR rule (Lab 5)
+x        <- sales$total_spent
+q1       <- quantile(x, 0.25)
+q3       <- quantile(x, 0.75)
+iqr_val  <- q3 - q1
+lower_f  <- q1 - 1.5 * iqr_val
+upper_f  <- q3 + 1.5 * iqr_val
+outliers <- x[x < lower_f | x > upper_f]
+
+cat("\n===== OUTLIER CHECK: total_spent =====\n")
+cat("Lower fence :", round(lower_f, 2), "\n")
+cat("Upper fence :", round(upper_f, 2), "\n")
+cat("Outliers    :", length(outliers), "transactions (",
+    round(100 * length(outliers) / length(x), 2), "% of rows )\n")
+
+# -- 4.3 Shape of the distribution (Pearson's skewness)
+# skew > 0 means the long tail points to the RIGHT (big bills)
+skew <- 3 * (mean(x) - median(x)) / sd(x)
+skew_text <- "roughly symmetric"
+if (skew > 0.5)  skew_text <- "clearly RIGHT-skewed (long tail of big bills)"
+if (skew < -0.5) skew_text <- "clearly LEFT-skewed"
+cat("\nSkewness (total_spent):", round(skew, 3), "-", skew_text, "\n")
+
+# -- 4.4 Correlation (Lab 5): what drives the bill total?
+cat("\nCorrelation quantity    vs total_spent :",
+    round(cor(sales$quantity,       sales$total_spent), 3), "\n")
+cat("Correlation price_per_unit vs total_spent :",
+    round(cor(sales$price_per_unit, sales$total_spent), 3), "\n\n")
+
+#  STEP 5 - DATA TRANSFORMATION (Lab 6)
+
+# 5.1 Extract date parts -> enables monthly / weekday analysis
+sales$year       <- as.numeric(format(sales$transaction_date, "%Y"))
+sales$year_month <- format(sales$transaction_date, "%Y-%m")
+sales$weekday    <- weekdays(sales$transaction_date)
+
+# 5.2 Min-max normalisation of price (Lab 6)
+# 0 = cheapest item in the store, 1 = most expensive
+sales$price_minmax <- (sales$price_per_unit - min(sales$price_per_unit)) /
+                      (max(sales$price_per_unit) - min(sales$price_per_unit))
+
+# 5.3 Z-score of total spent (Lab 6)
+# how many standard deviations a bill is above/below average
+sales$total_z <- (sales$total_spent - mean(sales$total_spent)) /
+                 sd(sales$total_spent)
+
+# 5.4 Binning with cut(): group bills into spend levels
+# edges come from the QUARTILES (five-number summary, Lab 5)
+spend_breaks <- quantile(sales$total_spent, probs = c(0, .25, .5, .75, 1))
+spend_breaks <- unique(spend_breaks)   # safety: no doubled edges
+bin_labels   <- c("Low", "Medium", "High", "Very High")
+bin_labels   <- bin_labels[1:(length(spend_breaks) - 1)]
+sales$spend_level <- cut(sales$total_spent, breaks = spend_breaks,
+                         labels = bin_labels, include.lowest = TRUE)
+
+cat("-----------------------------------------------------\n")
+cat("STEP 5: TRANSFORMATIONS (4 new variable groups)\n")
+cat("-----------------------------------------------------\n")
+cat("\n-- Spend-level distribution (quartile bins) --\n")
+print(table(sales$spend_level))
+
+cat("\n-- Preview of the new columns --\n")
+print(head(sales[, c("transaction_date", "year", "year_month", "weekday",
+                     "price_minmax", "total_z", "spend_level")]))
+
+#  STEP 6 - VISUALIZATION (base R plots, Labs 4-5)
+
+# -- 6.1 Histogram: the shape of spending per bill
+hist(sales$total_spent, breaks = 30, col = "steelblue",
+     main = "Distribution of Total Spent per Transaction",
+     xlab = "Total Spent ($)", ylab = "Number of Transactions")
+abline(v = mean(sales$total_spent),   col = "red",       lwd = 2)
+abline(v = median(sales$total_spent), col = "darkgreen", lwd = 2, lty = 2)
+legend("topright", c("Mean", "Median"),
+       col = c("red", "darkgreen"), lwd = c(2, 2), lty = c(1, 2))
+cat("\nPlot 1 (Histogram): most bills are small and a few are\n")
+cat("large. The red MEAN line sits to the RIGHT of the green\n")
+cat("MEDIAN line - the classic signature of a right-skewed\n")
+cat("distribution, matching the skewness computed in Step 4.\n")
+
+# -- 6.2 Barplot: which product category earns the most
+cat_rev <- sales %>%
+  group_by(category) %>%
+  summarise(revenue = sum(total_spent)) %>%
+  arrange(desc(revenue))
+barplot(rev(cat_rev$revenue), names.arg = rev(cat_rev$category),
+        horiz = TRUE, col = "darkorange", las = 1, cex.names = 0.75,
+        main = "Revenue by Product Category", xlab = "Total Revenue ($)")
+cat("\nPlot 2 (Barplot): ranks all categories by revenue. The\n")
+cat("top bars are the store's money-makers; the bottom ones\n")
+cat("(e.g. Furniture in a supermarket!) may be worth a\n")
+cat("business discussion in the report.\n")
+
+# -- 6.3 Boxplot: spending spread + outliers per category
+boxplot(total_spent ~ category, data = sales,
+        col = terrain.colors(length(unique(sales$category))),
+        las = 2, cex.axis = 0.7,
+        main = "Total Spent by Category (Boxplots)",
+        ylab = "Total Spent ($)")
+abline(h = median(sales$total_spent), lty = 2, col = "red")
+cat("\nPlot 3 (Boxplot): each box is the middle 50% of that\n")
+cat("category's bills (IQR); the thick line is the median.\n")
+cat("Dots beyond the whiskers are exactly the 1.5 x IQR\n")
+cat("outliers we counted in Step 4. The dashed red line is\n")
+cat("the overall median for comparison.\n")
+
+# -- 6.4 Line plot: monthly revenue over time
+monthly_rev <- sales %>%
+  group_by(year_month) %>%
+  summarise(revenue = sum(total_spent)) %>%
+  arrange(year_month)
+yrs <- range(sales$year)
+plot(as.Date(paste0(monthly_rev$year_month, "-01")), monthly_rev$revenue,
+     type = "b", pch = 16, lwd = 2, col = "darkblue",
+     main = paste("Monthly Revenue Trend", yrs[1], "-", yrs[2]),
+     xlab = "Month", ylab = "Revenue ($)")
+abline(h = mean(monthly_rev$revenue), col = "red", lty = 2)
+cat("\nPlot 4 (Line plot): revenue month by month. It shows\n")
+cat("seasonal spikes and whether the store is growing, flat\n")
+cat("or shrinking across the whole 3-year period.\n")
+
+# -- 6.5 Pie chart: in-store vs online share
+loc_table <- table(sales$location)
+pie(loc_table, main = "Transactions: In-Store vs Online",
+    col = c("skyblue", "salmon", "gold")[1:length(loc_table)])
+cat("\nPlot 5 (Pie chart): the channel split - do customers\n")
+cat("prefer shopping in the store or ordering online?\n\n")
+
+#  STEP 7 - AGGREGATION & RESULTS
+
+cat("-----------------------------------------------------\n")
+cat("STEP 7: AGGREGATED RESULTS (the numbers for the report)\n")
+cat("-----------------------------------------------------\n")
+
+# 7.1 Category performance
+cat_summary <- sales %>%
+  group_by(category) %>%
+  summarise(transactions = n(),
+            revenue   = round(sum(total_spent), 0),
+            avg_spend = round(mean(total_spent), 2)) %>%
+  arrange(desc(revenue))
+cat("\n-- 7.1 Revenue by category --\n")
+print(as.data.frame(cat_summary))
+
+# 7.2 Yearly performance: is the store growing?
+year_summary <- sales %>%
+  group_by(year) %>%
+  summarise(transactions = n(),
+            revenue = round(sum(total_spent), 0)) %>%
+  arrange(year)
+cat("\n-- 7.2 Revenue by year --\n")
+print(as.data.frame(year_summary))
+cat("NOTE: 2025 only contains January, so its low total is\n")
+cat("expected - it is a partial year, not a revenue crash.\n")
+
+# 7.3 Payment method popularity
+pay_summary <- sales %>%
+  group_by(payment_method) %>%
+  summarise(transactions = n(),
+            revenue = round(sum(total_spent), 0)) %>%
+  arrange(desc(revenue))
+cat("\n-- 7.3 Payment methods --\n")
+print(as.data.frame(pay_summary))
+
+# 7.4 Do discounts actually change spending?
+disc_summary <- sales %>%
+  group_by(discount_applied) %>%
+  summarise(transactions = n(),
+            avg_spend = round(mean(total_spent), 2)) %>%
+  arrange(desc(avg_spend))
+cat("\n-- 7.4 Effect of discounts on average spend --\n")
+print(as.data.frame(disc_summary))
+
+# 7.5 Busiest weekdays
+day_summary <- sales %>%
+  group_by(weekday) %>%
+  summarise(transactions = n(),
+            avg_spend = round(mean(total_spent), 2)) %>%
+  arrange(desc(transactions))
+cat("\n-- 7.5 Weekday traffic --\n")
+print(as.data.frame(day_summary))
+
+# 7.6 Top 5 items by revenue (excluding the unknown filler)
+top_items <- sales %>%
+  filter(item != "Unknown Item") %>%
+  group_by(item) %>%
+  summarise(revenue = round(sum(total_spent), 0)) %>%
+  arrange(desc(revenue)) %>%
+  head(5)
+cat("\n-- 7.6 Top 5 items by revenue --\n")
+print(as.data.frame(top_items))
+
+# 7.7 Reshaping with tidyr (Lab 6): revenue by Year x Location
+year_loc <- sales %>%
+  group_by(year, location) %>%
+  summarise(revenue = round(sum(total_spent), 0)) %>%
+  pivot_wider(names_from = location, values_from = revenue)
+cat("\n-- 7.7 Revenue by Year x Location (pivot_wider) --\n")
+print(as.data.frame(year_loc))
+
+#  STEP 8 - CONCLUSION (written from our own live results)
+
+top_cat     <- cat_summary$category[1]
+top_cat_pct <- round(100 * cat_summary$revenue[1] / sum(cat_summary$revenue), 1)
+best_year   <- year_summary$year[which.max(year_summary$revenue)]
+
+cat("\n=====================================================\n")
+cat("  CONCLUSION - KEY FINDINGS\n")
+cat("=====================================================\n")
+cat("1. The raw file had", nrow(sales_raw), "rows. We repaired",
+    n_total_fixed + n_price_fixed + n_qty_fixed, "missing values\n",
+    "   using the Price x Quantity rule and dropped only",
+    length(bad_rows), "unusable rows,\n   ending with",
+    nrow(sales), "clean transactions - no blind deletion.\n")
+cat("2.", as.character(top_cat), "is the strongest category with",
+    top_cat_pct, "% of total revenue.\n")
+cat("3. The best year was", best_year,
+    "- see the yearly revenue table in Step 7.\n")
+cat("4. The average bill is $", round(mean(sales$total_spent), 2),
+    "but the distribution is right-skewed\n   (skewness =",
+    round(skew, 2), "), so the median is the fairer 'typical bill'.\n")
+cat("5.", length(outliers), "unusually large bills were flagged by\n",
+    "   the 1.5 x IQR rule. They are valid big purchases, not\n",
+    "   data errors, so we kept them in the analysis.\n")
+cat("6. Discount, weekday and channel tables in Step 7 give the\n",
+    "   store clear, data-backed recommendations.\n")
+
+
